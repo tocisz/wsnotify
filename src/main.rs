@@ -2,7 +2,7 @@ extern crate notify;
 
 use notify::{Watcher, RecursiveMode, RawEvent, raw_watcher};
 use notify::op::Op;
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel,Sender};
 
 extern crate app_dirs;
 use app_dirs::*;
@@ -12,7 +12,10 @@ use std::path::Path;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Read;
-//use std::io::Error;
+use std::thread;
+
+mod ten_minutes;
+use ten_minutes::MeterControlMessage;
 
 fn read_file_length(path: &std::path::Path) -> Result<usize,std::io::Error> {
     match std::fs::metadata(path) {
@@ -41,17 +44,23 @@ trait CameraEventWatcher {
     fn on_image_save(&self, line: &str);
 }
 
-struct EchoCameraWatcher {}
-impl CameraEventWatcher for EchoCameraWatcher {
+struct SystrayCameraWatcher {
+    tx : Sender<MeterControlMessage>
+}
+impl CameraEventWatcher for SystrayCameraWatcher {
     fn on_camera_start(&self, line: &str) {
         println!("{}", line);
     }
+
     fn on_camera_prepare(&self, line: &str) {
         println!("{}", line);
     }
+
     fn on_camera_finish(&self, line: &str) {
         println!("{}", line);
+        self.tx.send(MeterControlMessage::MarkSafe).ok();
     }
+
     fn on_capture_start(&self, line: &str) {
         println!("{}", line);
     }
@@ -90,12 +99,12 @@ impl FileScanner {
     fn handle_event(&mut self, op: Op) -> Result<(), String> {
 
         if op != notify::op::WRITE {
-            // TODO support handling logfile rolling
+            // TODO support handling of logfile rolling
             return Ok(());
         }
 
         let len = read_file_length(&self.file_name).map_err( |err| err.to_string())?;
-        // println!("{:?} {}", op, len);
+        //println!("{:?} {}", op, len);
 
         let mut buffer = vec![0; len-self.last_byte_read].into_boxed_slice();
         self.file.seek(SeekFrom::Start(self.last_byte_read as u64))
@@ -129,28 +138,37 @@ impl FileScanner {
 
 const APP_INFO: AppInfo = AppInfo{name: "Logs", author: "CrossoverWorkSmart"};
 
-fn main() {
-    let mut path = get_app_root(AppDataType::UserConfig, &APP_INFO).unwrap();
-    path.push("deskapp.log");
-    let path = path.as_path();
+fn create_log_watch_thread(ui_tx: Sender<MeterControlMessage>) {
+    thread::spawn(move || {
+        let mut path = get_app_root(AppDataType::UserConfig, &APP_INFO).unwrap();
+        path.push("deskapp.log");
+        let path = path.as_path();
 
-    // Create a channel to receive the events.
-    let (tx, rx) = channel();
+        // Create a channel to receive the events.
+        let (tx, rx) = channel();
 
-    // Create a watcher object, delivering raw events.
-    // The notification back-end is selected based on the platform.
-    let mut watcher = raw_watcher(tx).unwrap();
-    let camera = Box::new(EchoCameraWatcher{});
-    let mut scanner = FileScanner::create(path, camera).unwrap();
+        // Create a watcher object, delivering raw events.
+        // The notification back-end is selected based on the platform.
+        let mut watcher = raw_watcher(tx).unwrap();
+        let camera = Box::new(SystrayCameraWatcher { tx: ui_tx });
+        let mut scanner = FileScanner::create(path, camera).unwrap();
 
-    // Add a path to be watched. All files and directories at that path and
-    // below will be monitored for changes.
-    watcher.watch(path, RecursiveMode::NonRecursive).unwrap();
-    loop {
-        match rx.recv() {
-            Ok(RawEvent{path: Some(_path), op: Ok(op), cookie: _cookie}) => scanner.handle_event(op).unwrap(),
-            Ok(event) => println!("broken event: {:?}", event),
-            Err(e) => println!("watch error: {:?}", e),
+        // Add a path to be watched. All files and directories at that path and
+        // below will be monitored for changes.
+        watcher.watch(path, RecursiveMode::NonRecursive).unwrap();
+        loop {
+            match rx.recv() {
+                Ok(RawEvent { path: Some(_path), op: Ok(op), cookie: _cookie }) => scanner.handle_event(op).unwrap(),
+                Ok(event) => println!("broken event: {:?}", event),
+                Err(e) => println!("watch error: {:?}", e),
+            }
         }
-    }
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn main() {
+    let (ui_tx, ui_rx) = channel();
+    create_log_watch_thread(ui_tx);
+    ten_minutes::TenMinutesMeter::new(ui_rx).main();
 }
