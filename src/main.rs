@@ -14,6 +14,10 @@ use std::io::SeekFrom;
 use std::io::Read;
 use std::thread;
 
+#[macro_use] extern crate lazy_static;
+extern crate regex;
+use regex::Regex;
+
 mod ten_minutes;
 use ten_minutes::MeterControlMessage;
 
@@ -41,13 +45,24 @@ trait CameraEventWatcher {
     fn on_camera_finish(&self, line: &str);
 
     // Saved an image to
-    fn on_image_save(&self, line: &str);
+    fn on_webcam_image_save(&self, line: &str);
+
+    // Saved an image to
+    fn on_screenshot_save(&self, line: &str);
 }
 
 struct SystrayCameraWatcher {
     tx : Sender<MeterControlMessage>
 }
 impl CameraEventWatcher for SystrayCameraWatcher {
+    fn on_capture_start(&self, line: &str) {
+        println!("{}", line);
+    }
+
+    fn on_capture_stop(&self, line: &str) {
+        println!("{}", line);
+    }
+
     fn on_camera_start(&self, line: &str) {
         println!("{}", line);
     }
@@ -58,19 +73,16 @@ impl CameraEventWatcher for SystrayCameraWatcher {
 
     fn on_camera_finish(&self, line: &str) {
         println!("{}", line);
-        self.tx.send(MeterControlMessage::MarkSafe).ok();
+        self.tx.send(MeterControlMessage::PhotoDone).ok();
     }
 
-    fn on_capture_start(&self, line: &str) {
-        println!("{}", line);
+    fn on_webcam_image_save(&self, line: &str) {
+        println!("WEBCAM {}", line);
     }
 
-    fn on_capture_stop(&self, line: &str) {
-        println!("{}", line);
-    }
-
-    fn on_image_save(&self, line: &str) {
-        println!("{}", line);
+    fn on_screenshot_save(&self, line: &str) {
+        println!("SCREENSHOT {}", line);
+        self.tx.send(MeterControlMessage::ScreenShotDone).ok();
     }
 }
 
@@ -97,6 +109,10 @@ impl FileScanner {
     }
 
     fn handle_event(&mut self, op: Op) -> Result<(), String> {
+        lazy_static! {
+            static ref SAVE_CAMERA: Regex = Regex::new("Saved an image to .*webcam_").unwrap();
+            static ref SAVE_SCREENSHOT: Regex = Regex::new("Saved an image to .*screenshot_").unwrap();
+        }
 
         if op != notify::op::WRITE {
             // TODO support handling of logfile rolling
@@ -124,8 +140,10 @@ impl FileScanner {
                 self.camera_watcher.on_capture_start(s);
             } else if String::from(s).contains("Data capture stopped.") {
                 self.camera_watcher.on_capture_stop(s);
-            } else if String::from(s).contains("Saved an image to ") {
-                self.camera_watcher.on_image_save(s);
+            } else if SAVE_CAMERA.is_match(s) {
+                self.camera_watcher.on_webcam_image_save(s);
+            } else if SAVE_SCREENSHOT.is_match(s) {
+                self.camera_watcher.on_screenshot_save(s);
             }
         }
 
@@ -138,7 +156,7 @@ impl FileScanner {
 
 const APP_INFO: AppInfo = AppInfo{name: "Logs", author: "CrossoverWorkSmart"};
 
-fn create_log_watch_thread(ui_tx: Sender<MeterControlMessage>) {
+fn create_log_watch_thread(ui_tx: Sender<MeterControlMessage>)/* -> JoinHandle<()>*/ {
     thread::spawn(move || {
         let mut path = get_app_root(AppDataType::UserConfig, &APP_INFO).unwrap();
         path.push("deskapp.log");
@@ -171,4 +189,20 @@ fn main() {
     let (ui_tx, ui_rx) = channel();
     create_log_watch_thread(ui_tx);
     ten_minutes::TenMinutesMeter::new(ui_rx).main();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regex() {
+        let save_camera: Regex = Regex::new("Saved an image to .*webcam_").unwrap();
+        let save_screen: Regex = Regex::new("Saved an image to .*screenshot_").unwrap();
+        assert!(save_camera.is_match("[2018-02-07 09:30:17,492][INFO ] Saved an image to C:\\Users\\tcich\\AppData\\Roaming\\CrossoverWorkSmart\\DataCapture\\Data_02_07_18_08_30_00\\webcam_08_30_11.dcw"));
+        assert!(!save_screen.is_match("[2018-02-07 09:30:17,492][INFO ] Saved an image to C:\\Users\\tcich\\AppData\\Roaming\\CrossoverWorkSmart\\DataCapture\\Data_02_07_18_08_30_00\\webcam_08_30_11.dcw"));
+
+        assert!(!save_camera.is_match("[2018-02-07 09:30:31,562][INFO ] Saved an image to C:\\Users\\tcich\\AppData\\Roaming\\CrossoverWorkSmart\\DataCapture\\Data_02_07_18_08_30_00\\screenshot_08_30_29.dcs"));
+        assert!(save_screen.is_match("[2018-02-07 09:30:31,562][INFO ] Saved an image to C:\\Users\\tcich\\AppData\\Roaming\\CrossoverWorkSmart\\DataCapture\\Data_02_07_18_08_30_00\\screenshot_08_30_29.dcs"));
+    }
 }

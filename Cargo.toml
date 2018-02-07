@@ -1,6 +1,6 @@
 [package]
 name = "wsnotify"
-version = "0.1.0"
+version = "2.1.0"
 authors = ["Tomasz Cichocki <cichymail@gmail.com>"]
 
 [dependencies]
@@ -8,6 +8,8 @@ notify = "4.0.0"
 app_dirs = "^1.1.1"
 systray = { git = "https://github.com/tocisz/systray-rs" }
 # systray = { path = "../systray-rs" }
+regex = "0.2"
+lazy_static = "1.0"
 
 [build-dependencies]
 embed-resource = { git = "https://github.com/nabijaczleweli/rust-embed-resource" }
