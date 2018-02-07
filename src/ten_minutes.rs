@@ -1,9 +1,9 @@
 extern crate systray;
 
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver,Sender};
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::process;
+//use std::process;
 use std::fmt;
 
 pub enum MeterControlMessage {
@@ -25,6 +25,7 @@ impl fmt::Display for Icon {
 pub struct TenMinutesMeter {
     app : systray::Application,
     rx : Receiver<MeterControlMessage>,
+//    shutdown_tx : Sender<()>,
     last_reminder : u16,
     photo_done : bool,
     screenshot_done : bool,
@@ -34,14 +35,15 @@ pub struct TenMinutesMeter {
 const TEN_MINUTES : u16 = 600;
 
 impl TenMinutesMeter {
-    pub fn new(rx : Receiver<MeterControlMessage>) -> TenMinutesMeter {
+    pub fn new(rx : Receiver<MeterControlMessage>, shutdown_tx : Sender<()>) -> TenMinutesMeter {
         match systray::Application::new() {
             Ok(w) => {
                 let mut app = w;
-                TenMinutesMeter::init(&mut app);
+                TenMinutesMeter::init(&mut app, shutdown_tx);
                 TenMinutesMeter {
                     app,
                     rx,
+//                    shutdown_tx,
                     last_reminder: 0,
                     photo_done: false,
                     screenshot_done: false,
@@ -52,12 +54,12 @@ impl TenMinutesMeter {
         }
     }
 
-    fn init(app : &mut systray::Application) -> () {
+    fn init(app : &mut systray::Application, shutdown_tx : Sender<()>) -> () {
         app.set_icon_from_resource(&"Stop".to_string()).ok();
-        app.add_menu_item(&"Quit".to_string(), |window| {
+        app.add_menu_item(&"Quit".to_string(), move |window| {
             window.shutdown().ok();
             window.quit();
-            process::exit(0);
+            shutdown_tx.send(()).ok();
         }).ok();
     }
 
@@ -86,7 +88,7 @@ impl TenMinutesMeter {
                 self.screenshot_done = false;
             }
 
-            let icon : Icon;
+            let icon;
             if TEN_MINUTES - reminder <= 5 { // Warn 5s before end of timecard
                 icon = Icon::Warning;
             } else if self.photo_done && self.screenshot_done {

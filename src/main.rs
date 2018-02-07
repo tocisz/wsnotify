@@ -2,7 +2,7 @@ extern crate notify;
 
 use notify::{Watcher, RecursiveMode, RawEvent, raw_watcher};
 use notify::op::Op;
-use std::sync::mpsc::{channel,Sender};
+use std::sync::mpsc::{channel,Sender,Receiver,RecvTimeoutError};
 
 extern crate app_dirs;
 use app_dirs::*;
@@ -13,6 +13,7 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Read;
 use std::thread;
+use std::time::Duration;
 
 #[macro_use] extern crate lazy_static;
 extern crate regex;
@@ -156,7 +157,7 @@ impl FileScanner {
 
 const APP_INFO: AppInfo = AppInfo{name: "Logs", author: "CrossoverWorkSmart"};
 
-fn create_log_watch_thread(ui_tx: Sender<MeterControlMessage>)/* -> JoinHandle<()>*/ {
+fn create_log_watch_thread(ui_tx: Sender<MeterControlMessage>, shutdown_rx : Receiver<()>) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut path = get_app_root(AppDataType::UserConfig, &APP_INFO).unwrap();
         path.push("deskapp.log");
@@ -174,21 +175,29 @@ fn create_log_watch_thread(ui_tx: Sender<MeterControlMessage>)/* -> JoinHandle<(
         // Add a path to be watched. All files and directories at that path and
         // below will be monitored for changes.
         watcher.watch(path, RecursiveMode::NonRecursive).unwrap();
-        loop {
-            match rx.recv() {
+        'recv_loop: loop {
+            match rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(RawEvent { path: Some(_path), op: Ok(op), cookie: _cookie }) => scanner.handle_event(op).unwrap(),
                 Ok(event) => println!("broken event: {:?}", event),
+                Err(RecvTimeoutError::Timeout) => (), // that's OK
                 Err(e) => println!("watch error: {:?}", e),
             }
+
+            for _ in shutdown_rx.try_iter() {
+                println!("Received shutdown message.");
+                break 'recv_loop;
+            }
         }
-    });
+    })
 }
 
 #[cfg(target_os = "windows")]
 fn main() {
     let (ui_tx, ui_rx) = channel();
-    create_log_watch_thread(ui_tx);
-    ten_minutes::TenMinutesMeter::new(ui_rx).main();
+    let (shutdown_tx, shutdown_rx) = channel();
+    let handle = create_log_watch_thread(ui_tx, shutdown_rx);
+    ten_minutes::TenMinutesMeter::new(ui_rx, shutdown_tx).main();
+    handle.join().ok();
 }
 
 #[cfg(test)]
