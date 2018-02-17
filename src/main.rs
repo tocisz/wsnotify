@@ -121,6 +121,12 @@ impl FileScanner {
         }
 
         let len = read_file_length(&self.file_name).map_err( |err| err.to_string())?;
+        if len < self.last_byte_read {
+            println!("Rewinding from {} to 0 and reading till {}", self.last_byte_read, len);
+            self.file = OpenOptions::new().read(true).open(&self.file_name)
+                .map_err( |err| err.to_string())?;
+            self.last_byte_read = 0;
+        }
         //println!("{:?} {}", op, len);
 
         let mut buffer = vec![0; len-self.last_byte_read].into_boxed_slice();
